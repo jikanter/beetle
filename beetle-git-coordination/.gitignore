@@ -1,0 +1,5 @@
+__pycache__
+.claude/settings.local.json
+# add some common places repos.json could be stored
+.config/repos.json
+memory/repos.json

@@ -1,0 +1,34 @@
+{
+  "$comment": [
+    "beetle repo manifest — machine-local, never committed to any repo.",
+    "Lives at $BEETLE_REPOS, else $XDG_CONFIG_HOME/beetle/repos.json, else ~/.config/beetle/repos.json.",
+    "Set BEETLE_REPOS in .claude/settings.local.json (gitignored) to relocate per machine.",
+    "'path' supports ~ and $ENV expansion. 'url' should be the GitHub URL so courier summaries stay portable.",
+    "Mirrors the portable mcp.json artifact pattern from aichat integrated-architecture docs.",
+    "Supports a 'meta_repo' field to point to the meta repository for further context.",
+    "Consistency is enforced: if meta repository information contradicts the local repository, error loudly and flag to the user.",
+    "Note that if you adopt a meta-repo structure for multi-repo projects, you should set 'meta_repo' to the URL of the meta repository.",
+    "By design the meta repo should not have any machine-local configuration or secrets"
+  ],
+  "repos": [
+    {
+      "name": "aichat",
+      "path": "~/Developer/Projects/aichat",
+      "url": "https://github.com/jikanter/eridian-ai",
+      "role": "runtime"
+    },
+    {
+      "name": "llm-functions",
+      "path": "~/Library/Application Support/aichat/functions",
+      "url": "https://github.com/sigoden/llm-functions",
+      "role": "tools"
+    },
+    {
+      "name": "brief",
+      "path": "~/Developer/Projects/brief",
+      "url": "https://github.com/jikanter/brief",
+      "role": "agents-md-generation"
+    }
+  ],
+  "meta_repo": "https://github.com/jikanter/eridian-agents"
+}
