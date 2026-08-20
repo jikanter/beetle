@@ -31,5 +31,6 @@
       "url": "https://github.com/jikanter/astrophage",
       "role": "replay-cache"
     }
-  ]
+  ],
+ "meta_repo": "https://github.com/jikanter/eridian-agents"
 }
