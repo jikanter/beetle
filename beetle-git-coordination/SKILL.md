@@ -2,7 +2,7 @@
 name: beetle-git-coordination
 description: Coordinate git operations across the multiple repositories of one integrated system (status, sync, matching branches, fan-out commands, coordinated-change records) without hardcoding host paths. Repo set comes from a machine-local JSON manifest resolved via $BEETLE_REPOS / XDG, never committed to any repo.
 trigger: /beetle, /beetle-git-coordination, /courier
-version: 0.0.1
+version: 0.0.2
 compatibility: python3.13
 metadata: ['courier', 'beetle', 'git', 'eridian-ai']
 user-invocable: true

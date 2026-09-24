@@ -3,6 +3,7 @@
     "beetle repo manifest — machine-local, never committed to any repo.",
     "Lives at $BEETLE_REPOS, else $XDG_CONFIG_HOME/beetle/repos.json, else ~/.config/beetle/repos.json.",
     "Set BEETLE_REPOS in .claude/settings.local.json (gitignored) to relocate per machine.",
+    "Or, set it in .envrc (direnv) or .env (dotenv) and it will get picked up by whatever agent needs it",
     "'path' supports ~ and $ENV expansion. 'url' should be the GitHub URL so courier summaries stay portable.",
     "Mirrors the portable mcp.json artifact pattern from aichat integrated-architecture docs."
   ],
