@@ -97,6 +97,34 @@ def main() -> int:
         rc_ok = run("doctor", "--only", "alpha,beta")
         check("doctor passes for valid repos", rc_ok == 0, f"rc={rc_ok}")
 
+        # --- doctor: per-repo "remote" (default origin), port-insensitive match ---
+        git(a, "remote", "add", "origin", "git@github.com:me/alpha.git")
+        git(a, "remote", "add", "sandbox", "ssh://git@script:2221/admin/alpha.git")
+        gitea = root / "gitea.json"
+        entry = {"name": "alpha", "path": str(a), "url": "http://script:3006/admin/alpha"}
+        gitea.write_text(json.dumps({"repos": [{**entry, "remote": "sandbox"}]}))
+        os.environ["BEETLE_REPOS"] = str(gitea)
+        check("manifest remote key loads", beetle.load_repos()[1][0].remote == "sandbox")
+        check("doctor checks the named remote", run("doctor") == 0)
+        gitea.write_text(json.dumps({"repos": [entry]}))
+        check("remote defaults to origin", beetle.load_repos()[1][0].remote == "origin")
+        check("doctor flags url != origin", run("doctor") == 1)
+        gitea.write_text(json.dumps({"repos": [{**entry, "remote": "nope"}]}))
+        check("doctor flags a missing remote", run("doctor") == 1)
+        os.environ["BEETLE_REPOS"] = str(manifest)
+        check(
+            "gitea ssh and http urls match across ports",
+            beetle._urls_match("ssh://git@script:2221/admin/x.git", "http://script:3006/admin/x"),
+        )
+        check(
+            "github scp and https urls still match",
+            beetle._urls_match("git@github.com:me/x.git", "https://github.com/me/x"),
+        )
+        check(
+            "different repo paths do not match",
+            not beetle._urls_match("ssh://git@script:2221/admin/x.git", "http://script:3006/admin/y"),
+        )
+
         # --- status json shape ---
         import io
         import contextlib

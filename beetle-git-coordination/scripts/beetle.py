@@ -3,8 +3,8 @@
 
 Named after the Beetle probes in *Project Hail Mary*: small couriers that carry
 messages between distant places. This tool carries git operations across the
-several repositories that make up one integrated system (e.g. `aichat` ↔
-`llm-functions` ↔ `brief` ↔ harness) without ever hardcoding host paths.
+several repositories that make up one integrated system (e.g. aichat ↔
+llm-functions ↔ astrophage ↔ harness) without ever hardcoding host paths.
 
 Repo manifest resolution (first hit wins):
   1. $BEETLE_REPOS                          (set this in settings.local.json)
@@ -28,12 +28,17 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-import yaml
+
+# ---------------------------------------------------------------------------
+# Manifest resolution & loading
+# ---------------------------------------------------------------------------
+
 
 def default_config_dir() -> Path:
     xdg = os.environ.get("XDG_CONFIG_HOME")
     base = Path(xdg) if xdg else Path.home() / ".config"
     return base / "beetle"
+
 
 def manifest_path(explicit: str | None = None) -> Path:
     """Resolve the manifest location without requiring it to exist."""
@@ -44,8 +49,10 @@ def manifest_path(explicit: str | None = None) -> Path:
         return Path(env).expanduser()
     return default_config_dir() / "repos.json"
 
+
 def _expand(p: str) -> Path:
     return Path(os.path.expandvars(os.path.expanduser(p)))
+
 
 @dataclass
 class Repo:
@@ -53,7 +60,7 @@ class Repo:
     path: Path
     url: str | None = None
     role: str | None = None
-    meta_url: str | None = None
+    remote: str = "origin"  # the git remote `url` must match (doctor)
 
     @property
     def git_dir(self) -> Path:
@@ -65,8 +72,8 @@ class Repo:
     def is_git(self) -> bool:
         return self.git_dir.exists()
 
+
 def load_repos(explicit: str | None = None) -> tuple[Path, list[Repo]]:
-    data = None
     mpath = manifest_path(explicit)
     if not mpath.exists():
         die(
@@ -82,17 +89,19 @@ def load_repos(explicit: str | None = None) -> tuple[Path, list[Repo]]:
     for i, entry in enumerate(data.get("repos", [])):
         if "name" not in entry or "path" not in entry:
             die(f"manifest entry #{i} missing required 'name' or 'path'")
-        repo_data = {
-            "name": entry["name"],
-            "path": _expand(entry["path"]),
-            "url": entry.get("url"),
-            "role": entry.get("role"),
-            "meta_url": entry.get("meta_url"),
-        }
-        repos.append(Repo(**repo_data))
+        repos.append(
+            Repo(
+                name=entry["name"],
+                path=_expand(entry["path"]),
+                url=entry.get("url"),
+                role=entry.get("role"),
+                remote=entry.get("remote", "origin"),
+            )
+        )
     if not repos:
         die(f"manifest {mpath} has no repos")
     return mpath, repos
+
 
 def select(repos: list[Repo], only: str | None) -> list[Repo]:
     if not only:
@@ -105,6 +114,11 @@ def select(repos: list[Repo], only: str | None) -> list[Repo]:
     return chosen
 
 
+# ---------------------------------------------------------------------------
+# git plumbing
+# ---------------------------------------------------------------------------
+
+
 def git(repo: Repo, *args: str, check: bool = False) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", "-C", str(repo.path), *args],
@@ -113,15 +127,19 @@ def git(repo: Repo, *args: str, check: bool = False) -> subprocess.CompletedProc
         check=check,
     )
 
+
 def current_branch(repo: Repo) -> str:
     r = git(repo, "symbolic-ref", "--short", "-q", "HEAD")
     return r.stdout.strip() or "(detached)"
 
+
 def head_short(repo: Repo) -> str:
     return git(repo, "rev-parse", "--short", "HEAD").stdout.strip()
 
+
 def is_dirty(repo: Repo) -> bool:
     return bool(git(repo, "status", "--porcelain").stdout.strip())
+
 
 def ahead_behind(repo: Repo) -> tuple[int, int] | None:
     r = git(repo, "rev-list", "--left-right", "--count", "@{upstream}...HEAD")
@@ -130,59 +148,31 @@ def ahead_behind(repo: Repo) -> tuple[int, int] | None:
     behind, ahead = r.stdout.split()
     return int(ahead), int(behind)
 
+
 def remote_url(repo: Repo) -> str | None:
-    r = git(repo, "remote", "get-url", "origin")
+    r = git(repo, "remote", "get-url", repo.remote)
     return r.stdout.strip() if r.returncode == 0 else None
 
-def fetch_meta_data(repo: Repo) -> dict | None:
-    """Fetches data from a configured meta repository URL."""
-    if not repo.meta_url:
-        return None
-    print(f"  > Fetching meta data for '{repo.name}' from {repo.meta_url}...")
-    try:
-        import httpx
-        response = httpx.get(repo.meta_url, timeout=10)
-        response.raise_for_status()
-        # Assuming JSON response from meta endpoint
-        return response.json()
-    except Exception as e:
-        print(f"  > Warning: Failed to fetch meta data for {repo.name}: {e}", file=sys.stderr)
-        return None
+
+# ---------------------------------------------------------------------------
+# output helpers
+# ---------------------------------------------------------------------------
+
 
 def die(msg: str, code: int = 1) -> "NoReturn":  # type: ignore[name-defined]
     print(f"beetle: {msg}", file=sys.stderr)
     sys.exit(code)
 
+
 def emit(obj, as_json: bool) -> None:
     if as_json:
         print(json.dumps(obj, indent=2))
 
-# --- New Context Scanning Functions ---
 
-def scan_repo_for_context(repo: Repo) -> dict:
-    """Scans a single repo for context files (AGENTS.md, README.md, repos.yaml)."""
-    context = {}
-    files_to_find = ["AGENTS.md", "README.md", "repos.yaml"]
+# ---------------------------------------------------------------------------
+# subcommands
+# ---------------------------------------------------------------------------
 
-    for file_name in files_to_find:
-        path = repo.path / file_name
-        if path.exists():
-            try:
-                content = path.read_text()
-                context[file_name] = content
-                if file_name == "repos.yaml":
-                    try:
-                        # Attempt to parse YAML
-                        context[f"{file_name}_parsed"] = yaml.safe_load(content)
-                    except yaml.YAMLError as e:
-                        context[f"{file_name}_parsed_error"] = str(e)
-            except Exception as e:
-                context[f"{file_name}_error"] = str(e)
-        else:
-            context[file_name] = f"File not found."
-    return context
-
-# --- Subcommands ---
 
 def cmd_init(args) -> int:
     dest = manifest_path(args.manifest)
@@ -194,6 +184,7 @@ def cmd_init(args) -> int:
     print(f"scaffolded manifest at {dest}")
     print("edit it to point at your repos, then run:  beetle doctor")
     return 0
+
 
 def cmd_list(args) -> int:
     mpath, repos = load_repos(args.manifest)
@@ -217,6 +208,7 @@ def cmd_list(args) -> int:
             print(f"    {r.url}")
     return 0
 
+
 def cmd_doctor(args) -> int:
     mpath, repos = load_repos(args.manifest)
     repos = select(repos, args.only)
@@ -232,9 +224,9 @@ def cmd_doctor(args) -> int:
             if r.url:
                 actual = remote_url(r)
                 if actual and not _urls_match(actual, r.url):
-                    issues.append(f"origin={actual} != manifest url")
+                    issues.append(f"{r.remote}={actual} != manifest url")
                 elif actual is None:
-                    issues.append("no origin remote")
+                    issues.append(f"no {r.remote} remote")
         problems += len(issues)
         rows.append((r.name, "OK" if not issues else "; ".join(issues)))
     if args.json:
@@ -245,14 +237,20 @@ def cmd_doctor(args) -> int:
             print(f"  {mark} {name}: {status}")
     return 1 if problems else 0
 
+
 def _urls_match(a: str, b: str) -> bool:
-    """Loose compare: ignore .git suffix and scp-vs-https shape."""
+    """Loose compare: host + path only. Ignores scheme, user, port and a .git
+    suffix, so scp/ssh/https forms match, and a self-hosted forge whose ssh
+    and http ports differ (Gitea `ssh://git@host:2221/o/r` vs
+    `http://host:3006/o/r`) matches too."""
     def norm(u: str) -> str:
-        u = u.strip().removesuffix(".git")
-        u = u.replace("git@github.com:", "github.com/")
-        u = u.replace("https://", "").replace("http://", "")
-        return u.rstrip("/")
+        u = u.strip().removesuffix("/").removesuffix(".git")
+        u = u.split("://", 1)[1] if "://" in u else u.replace(":", "/", 1)  # scp form
+        u = u.rsplit("@", 1)[-1]  # drop user
+        host, _, path = u.partition("/")
+        return f"{host.split(':', 1)[0]}/{path}".rstrip("/")
     return norm(a) == norm(b)
+
 
 def cmd_status(args) -> int:
     mpath, repos = load_repos(args.manifest)
@@ -267,73 +265,222 @@ def cmd_status(args) -> int:
             {
                 "repo": r.name,
                 "branch": current_branch(r),
-                "head": head_short(
-                    r
-                )
+                "head": head_short(r),
+                "dirty": is_dirty(r),
+                "ahead": ab[0] if ab else None,
+                "behind": ab[1] if ab else None,
             }
         )
-    return 0
-
-def cmd_scan(args) -> int:
-    mpath, repos = load_repos(args.manifest)
     if args.json:
-        # Logic for JSON output of all contexts
-        results = []
-        for r in repos:
-            scan_results = scan_repo_for_context(r)
-            results.append({"name": r.name, "context": scan_results})
-        emit(results, True)
-    else:
-        print("--- Starting Local Context Scan ---")
-        for r in repos:
-            print(f"\n[--- {r.name} ---]")
-            context = scan_repo_for_context(r)
-            for file_name, value in context.items():
-                print(f"\n--- {file_name} ---")
-                if isinstance(value, dict):
-                    print(json.dumps(value, indent=2))
-                else:
-                    print(value)
+        emit({"manifest": str(mpath), "status": out}, True)
+        return 0
+    w = max((len(o["repo"]) for o in out), default=4)
+    print(f"  {'REPO'.ljust(w)}  BRANCH                 STATE")
+    for o in out:
+        if "error" in o:
+            print(f"  {o['repo'].ljust(w)}  -- {o['error']}")
+            continue
+        flags = []
+        if o["dirty"]:
+            flags.append("dirty")
+        if o["ahead"]:
+            flags.append(f"↑{o['ahead']}")
+        if o["behind"]:
+            flags.append(f"↓{o['behind']}")
+        if o["ahead"] is None:
+            flags.append("no-upstream")
+        state = " ".join(flags) or "clean"
+        print(f"  {o['repo'].ljust(w)}  {o['branch'][:20].ljust(20)}  {state}")
     return 0
 
-def main():
-    parser = argparse.ArgumentParser(description="Beetle Git Coordinator.")
-    parser.add_argument("-m", "--manifest", default=None, help="Path to the repo manifest.")
-    parser.add_argument("--only", type=str, default=None, help="Only target specific repositories.")
-    parser.add_argument("-j", "--json", action="store_true", help="Output in JSON format.")
-    parser.add_argument("-f", "--force", action="store_true", help="Force initialization even if manifest exists.")
-    subparsers = parser.add_subparsers(dest="command")
 
-    # Init command
-    parser_init = subparsers.add_parser("init", help="Scaffold a new manifest.")
-    parser_init.add_argument("-f", "--force", action="store_true")
+def cmd_sync(args) -> int:
+    mpath, repos = load_repos(args.manifest)
+    repos = select(repos, args.only)
+    rc = 0
+    for r in repos:
+        if not r.is_git():
+            print(f"  {r.name}: skip (not a git repo)")
+            rc = 1
+            continue
+        fetch = git(r, "fetch", "--all", "--prune")
+        if fetch.returncode != 0:
+            print(f"  {r.name}: fetch failed\n{fetch.stderr.strip()}")
+            rc = 1
+            continue
+        if args.pull:
+            if is_dirty(r):
+                print(f"  {r.name}: fetched; skip pull (working tree dirty)")
+                continue
+            pull = git(r, "merge", "--ff-only", "@{upstream}")
+            if pull.returncode != 0:
+                print(f"  {r.name}: fetched; ff-only merge failed (diverged?)")
+                rc = 1
+            else:
+                print(f"  {r.name}: synced (ff)")
+        else:
+            print(f"  {r.name}: fetched")
+    return rc
 
-    # List command
-    parser_list = subparsers.add_parser("list", help="List all repositories.")
 
-    # Doctor command
-    parser_doctor = subparsers.add_parser("doctor", help="Check the health of the repositories.")
+def cmd_branch(args) -> int:
+    mpath, repos = load_repos(args.manifest)
+    repos = select(repos, args.only)
+    rc = 0
+    for r in repos:
+        if not r.is_git():
+            print(f"  {r.name}: skip (not a git repo)")
+            rc = 1
+            continue
+        exists = git(r, "rev-parse", "--verify", "-q", f"refs/heads/{args.name}").returncode == 0
+        if exists:
+            res = git(r, "checkout", args.name)
+            verb = "checked out"
+        else:
+            cmd = ["checkout", "-b", args.name]
+            if args.base:
+                cmd.append(args.base)
+            res = git(r, *cmd)
+            verb = "created"
+        if res.returncode != 0:
+            print(f"  {r.name}: branch failed\n{res.stderr.strip()}")
+            rc = 1
+        else:
+            print(f"  {r.name}: {verb} {args.name}")
+    return rc
 
-    # Status command
-    parser_status = subparsers.add_parser("status", help="Show branch status of repositories.")
 
-    # Scan command (New)
-    parser_scan = subparsers.add_parser("scan", help="Scan repositories for context files.")
+def cmd_run(args) -> int:
+    mpath, repos = load_repos(args.manifest)
+    repos = select(repos, args.only)
+    if not args.gitargs:
+        die("nothing to run; pass git args after --, e.g. beetle run -- log --oneline -1")
+    rc = 0
+    for r in repos:
+        if not r.is_git():
+            print(f"  {r.name}: skip (not a git repo)")
+            rc = 1
+            continue
+        res = git(r, *args.gitargs)
+        rc = rc or res.returncode
+        print(f"── {r.name} " + "─" * max(0, 40 - len(r.name)))
+        if res.stdout:
+            print(res.stdout.rstrip())
+        if res.stderr:
+            print(res.stderr.rstrip(), file=sys.stderr)
+    return rc
 
-    args = parser.parse_args()
 
-    if args.command == "init":
-        return cmd_init(args)
-    elif args.command == "list":
-        return cmd_list(args)
-    elif args.command == "doctor":
-        return cmd_doctor(args)
-    elif args.command == "status":
-        return cmd_status(args)
-    elif args.command == "scan":
-        return cmd_scan(args)
+def cmd_courier(args) -> int:
+    """Record a coordinated change spanning repos; emit a GitHub-URL summary.
 
+    The summary links repos by GitHub URL (never local path) so it is portable
+    to a teammate who has only some repos cloned — the same rule the
+    integrated-architecture README enforces for cross-repo doc links.
+    """
+    mpath, repos = load_repos(args.manifest)
+    repos = select(repos, args.only)
+    entries = []
+    for r in repos:
+        if not r.is_git():
+            continue
+        entries.append(
+            {
+                "repo": r.name,
+                "url": r.url,
+                "branch": current_branch(r),
+                "head": head_short(r),
+                "dirty": is_dirty(r),
+            }
+        )
+    record = {
+        "ts": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+        "intent": args.intent,
+        "entries": entries,
+    }
+    log = default_config_dir() / "courier.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with log.open("a") as f:
+        f.write(json.dumps(record) + "\n")
+    if args.json:
+        emit(record, True)
+        return 0
+    print(f"📡 courier: {args.intent}")
+    for e in entries:
+        loc = e["url"] or e["repo"]
+        flag = " (dirty)" if e["dirty"] else ""
+        print(f"  {e['repo']}: {e['branch']} @ {e['head']}{flag}")
+        if e["url"]:
+            br = e["branch"]
+            if br not in ("(detached)",):
+                print(f"    {e['url'].removesuffix('.git')}/tree/{br}")
+    print(f"\nrecorded → {log}")
     return 0
+
+
+# ---------------------------------------------------------------------------
+# arg parsing
+# ---------------------------------------------------------------------------
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="beetle", description=__doc__.splitlines()[0])
+    p.add_argument("--manifest", help="explicit manifest path (overrides BEETLE_REPOS)")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    def add_common(sp, *, only=True, js=True):
+        if only:
+            sp.add_argument("--only", help="comma-separated repo names to act on")
+        if js:
+            sp.add_argument("--json", action="store_true", help="machine-readable output")
+
+    sp = sub.add_parser("init", help="scaffold a manifest from the bundled example")
+    sp.add_argument("--force", action="store_true")
+    sp.set_defaults(func=cmd_init)
+
+    sp = sub.add_parser("list", help="show resolved repos")
+    add_common(sp)
+    sp.set_defaults(func=cmd_list)
+
+    sp = sub.add_parser("doctor", help="validate each repo (exists, git, its remote (default origin) matches url)")
+    add_common(sp)
+    sp.set_defaults(func=cmd_doctor)
+
+    sp = sub.add_parser("status", help="branch/dirty/ahead-behind across repos")
+    add_common(sp)
+    sp.set_defaults(func=cmd_status)
+
+    sp = sub.add_parser("sync", help="fetch --all --prune (optionally --pull ff-only)")
+    add_common(sp)
+    sp.add_argument("--pull", action="store_true", help="also fast-forward merge upstream")
+    sp.set_defaults(func=cmd_sync)
+
+    sp = sub.add_parser("branch", help="create/checkout a matching branch across repos")
+    sp.add_argument("name")
+    sp.add_argument("--base", help="base ref for new branches")
+    add_common(sp)
+    sp.set_defaults(func=cmd_branch)
+
+    sp = sub.add_parser("run", help="fan out an arbitrary git command: beetle run -- log --oneline -1")
+    add_common(sp)
+    sp.add_argument("gitargs", nargs=argparse.REMAINDER)
+    sp.set_defaults(func=cmd_run)
+
+    sp = sub.add_parser("courier", help="record a coordinated cross-repo change; emit GitHub-URL summary")
+    sp.add_argument("intent", help="one-line description of the coordinated change")
+    add_common(sp)
+    sp.set_defaults(func=cmd_courier)
+
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    # strip a leading "--" left in REMAINDER
+    if getattr(args, "gitargs", None) and args.gitargs and args.gitargs[0] == "--":
+        args.gitargs = args.gitargs[1:]
+    return args.func(args)
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

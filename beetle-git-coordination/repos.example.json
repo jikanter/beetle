@@ -3,8 +3,7 @@
     "beetle repo manifest — machine-local, never committed to any repo.",
     "Lives at $BEETLE_REPOS, else $XDG_CONFIG_HOME/beetle/repos.json, else ~/.config/beetle/repos.json.",
     "Set BEETLE_REPOS in .claude/settings.local.json (gitignored) to relocate per machine.",
-    "Or, set it in .envrc (direnv) or .env (dotenv) and it will get picked up by whatever agent needs it",
-    "'path' supports ~ and $ENV expansion. 'url' should be the GitHub URL so courier summaries stay portable.",
+    "'path' supports ~ and $ENV expansion. 'url' is the browsable forge URL courier links to (GitHub, or e.g. a Gitea sandbox); optional 'remote' (default origin) is the git remote doctor checks it against.",
     "Mirrors the portable mcp.json artifact pattern from aichat integrated-architecture docs."
   ],
   "repos": [
@@ -15,14 +14,8 @@
       "role": "runtime"
     },
     {
-      "name": "brief",
-      "path": "~/Developer/Projects/brief",
-      "url": "https://github.com/jikanter/brief",
-      "role": "compiler"
-    },
-    {
       "name": "llm-functions",
-      "path": "/Volumes/ExternalData/admin/Developer/Scripts/llm-functions",
+      "path": "~/Library/Application Support/aichat/functions",
       "url": "https://github.com/jikanter/personal-llm-functions",
       "role": "tools"
     },
@@ -32,6 +25,5 @@
       "url": "https://github.com/jikanter/astrophage",
       "role": "replay-cache"
     }
-  ],
- "meta_repo": "https://github.com/jikanter/eridian-agents"
+  ]
 }
